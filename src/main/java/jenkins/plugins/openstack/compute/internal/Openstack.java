@@ -107,18 +107,15 @@ public class Openstack {
                     .authenticate()
                     .useRegion(region);
         } else {
-             //If not it is assumed that it is being used API V3
-
-                Identifier iDomain = Identifier.byName(domain);
-                Identifier project = Identifier.byName(tenant);
-                client = OSFactory.builderV3().endpoint(endPointUrl)
-                        .credentials(username, credential.getPlainText(), iDomain)
-                        .scopeToProject(project, iDomain)
-                        .authenticate()
-                        .useRegion(region)
-                ;
+            //If not it is assumed that it is being used API V3
+            Identifier iDomain = Identifier.byName(domain);
+            Identifier project = Identifier.byName(tenant);
+            client = OSFactory.builderV3().endpoint(endPointUrl)
+                    .credentials(username, credential.getPlainText(), iDomain)
+                    .scopeToProject(project, iDomain)
+                    .authenticate()
+                    .useRegion(region);
         }
-
         debug("Openstack client created for " + endPointUrl);
     }
 
