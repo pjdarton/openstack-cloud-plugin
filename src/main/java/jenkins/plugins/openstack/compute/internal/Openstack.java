@@ -96,7 +96,7 @@ public class Openstack {
 
     public Openstack(@Nonnull String endPointUrl, @Nonnull String identity, @Nonnull Secret credential, @CheckForNull String region) {
         // TODO refactor to split tenant:username everywhere including UI
-        String[] id = identity.split(":",3);
+        String[] id = identity.split(":", 3);
         String tenant = id.length > 0 ? id[0] : "";
         String username = id.length > 1 ? id[1] : "";
         String domain = id.length > 2 ? id[2] : "";
@@ -104,19 +104,20 @@ public class Openstack {
         if (domain.equals("")) {
             //If domain is empty it is assumed that is being used API V2
             builder = OSFactory.builder().endpoint(endPointUrl)
-                    .credentials(username, credential.getPlainText())
-                    .tenantName(tenant);
+                     .credentials(username, credential.getPlainText())
+                     .tenantName(tenant);
         } else {
             //If not it is assumed that it is being used API V3
             Identifier iDomain = Identifier.byName(domain);
             Identifier project = Identifier.byName(tenant);
             builder = OSFactory.builderV3().endpoint(endPointUrl)
-                    .credentials(username, credential.getPlainText(), iDomain)
-                    .scopeToProject(project, iDomain);
+                     .credentials(username, credential.getPlainText(), iDomain)
+                     .scopeToProject(project, iDomain);
         }
         client = builder
                 .authenticate()
-                .useRegion(region);
+                .useRegion(region)
+        ;
         debug("Openstack client created for " + endPointUrl);
     }
 
