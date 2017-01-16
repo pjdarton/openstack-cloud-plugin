@@ -54,6 +54,7 @@ import org.apache.commons.lang.ObjectUtils;
 import org.kohsuke.accmod.Restricted;
 import org.kohsuke.accmod.restrictions.NoExternalUse;
 import org.openstack4j.api.OSClient;
+import org.openstack4j.api.client.IOSClientBuilder;
 import org.openstack4j.api.compute.ComputeFloatingIPService;
 import org.openstack4j.api.exceptions.ResponseException;
 import org.openstack4j.model.common.BasicResource;
@@ -99,23 +100,23 @@ public class Openstack {
         String tenant = id.length > 0 ? id[0] : "";
         String username = id.length > 1 ? id[1] : "";
         String domain = id.length > 2 ? id[2] : "";
+        final IOSClientBuilder<OSClient, ?> builder;
         if (domain.equals("")) {
             //If domain is empty it is assumed that is being used API V2
-            client = OSFactory.builder().endpoint(endPointUrl)
+            builder = OSFactory.builder().endpoint(endPointUrl)
                     .credentials(username, credential.getPlainText())
-                    .tenantName(tenant)
-                    .authenticate()
-                    .useRegion(region);
+                    .tenantName(tenant);
         } else {
             //If not it is assumed that it is being used API V3
             Identifier iDomain = Identifier.byName(domain);
             Identifier project = Identifier.byName(tenant);
-            client = OSFactory.builderV3().endpoint(endPointUrl)
+            builder = OSFactory.builderV3().endpoint(endPointUrl)
                     .credentials(username, credential.getPlainText(), iDomain)
-                    .scopeToProject(project, iDomain)
-                    .authenticate()
-                    .useRegion(region);
+                    .scopeToProject(project, iDomain);
         }
+        client = builder
+                .authenticate()
+                .useRegion(region);
         debug("Openstack client created for " + endPointUrl);
     }
 
