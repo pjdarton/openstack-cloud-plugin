@@ -62,7 +62,7 @@ public class JCloudsSlaveTemplateTest {
     @Test
     public void eraseDefaults() throws Exception {
         SlaveOptions cloudOpts = SlaveOptionsTest.CUSTOM; // Make sure nothing collides with defaults
-        SlaveOptions templateOpts = cloudOpts.getBuilder().imageId("42").availabilityZone("other").build();
+        SlaveOptions templateOpts = cloudOpts.getBuilder().bootSource(JCloudsCloud.BootSource.IMAGE).imageId("42").availabilityZone("other").build();
         assertEquals(cloudOpts.getHardwareId(), templateOpts.getHardwareId());
 
         JCloudsSlaveTemplate template = new JCloudsSlaveTemplate(
@@ -76,7 +76,7 @@ public class JCloudsSlaveTemplateTest {
         );
 
         assertEquals(cloudOpts, cloud.getRawSlaveOptions());
-        assertEquals(SlaveOptions.builder().imageId("42").availabilityZone("other").build(), template.getRawSlaveOptions());
+        assertEquals(SlaveOptions.builder().bootSource(JCloudsCloud.BootSource.IMAGE).imageId("42").availabilityZone("other").build(), template.getRawSlaveOptions());
     }
 
     @Test

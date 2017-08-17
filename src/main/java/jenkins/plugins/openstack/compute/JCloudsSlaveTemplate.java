@@ -24,7 +24,10 @@ import org.kohsuke.accmod.restrictions.NoExternalUse;
 import org.kohsuke.stapler.DataBoundConstructor;
 import org.kohsuke.stapler.QueryParameter;
 import org.openstack4j.api.Builders;
+import org.openstack4j.model.compute.BDMDestType;
+import org.openstack4j.model.compute.BDMSourceType;
 import org.openstack4j.model.compute.Server;
+import org.openstack4j.model.compute.builder.BlockDeviceMappingBuilder;
 import org.openstack4j.model.compute.builder.ServerCreateBuilder;
 
 import com.google.common.base.Strings;
@@ -227,10 +230,59 @@ public class JCloudsSlaveTemplate implements Describable<JCloudsSlaveTemplate>, 
         // Ensure predictable server name so we can inject it into user data
         builder.name(serverName);
 
-        if (!Strings.isNullOrEmpty(opts.getImageId())) {
-            String imageId = cloud.getOpenstack().getImageIdFor(opts.getImageId());
-            LOGGER.fine("Setting image id to " + imageId);
-            builder.image(imageId);
+        final Openstack openstack = cloud.getOpenstack();
+        final JCloudsCloud.BootSource bootSource = opts.getBootSource() == null ? JCloudsCloud.BootSource.IMAGE : opts.getBootSource();
+        final String imageNameOrId = opts.getImageId();
+        final String effectiveImageId;
+        if (!Strings.isNullOrEmpty(imageNameOrId)) {
+            final List<String> ids;
+            switch (bootSource) {
+                case IMAGE :
+                    ids = openstack.getImageIdsFor(imageNameOrId);
+                    break;
+                case VOLUMESNAPSHOT :
+                    ids = openstack.getVolumeSnapshotIdsFor(imageNameOrId);
+                    break;
+                default :
+                    LOGGER.config("Don't know how to handle bootSource of " + bootSource + ".");
+                    ids = Collections.EMPTY_LIST;
+                    break;
+            }
+            final int numberFound = ids.size();
+            switch (numberFound) {
+                case 0 :
+                    LOGGER.warning("No active " + bootSource + " '" + imageNameOrId + "' could be found.");
+                    effectiveImageId = null;
+                    break;
+                default :
+                    effectiveImageId = ids.get(numberFound - 1);
+                    LOGGER.warning("Multiple " + bootSource + "s (" + numberFound + ") found with name '" + imageNameOrId
+                            + "'.  Using most recent one, '" + effectiveImageId + "'.");
+                    break;
+                case 1 :
+                    effectiveImageId = ids.get(0);
+                    break;
+            }
+        } else {
+            effectiveImageId = null;
+        }
+        if (effectiveImageId != null) {
+            switch (bootSource) {
+                case IMAGE :
+                    LOGGER.fine("Setting image id to " + effectiveImageId);
+                    builder.image(effectiveImageId);
+                    break;
+                case VOLUMESNAPSHOT :
+                    LOGGER.fine("Setting blockDevice to volume created from VolumeSnapshot " + effectiveImageId);
+                    BlockDeviceMappingBuilder volumeBuilder = Builders.blockDeviceMapping()
+                            .sourceType(BDMSourceType.SNAPSHOT)
+                            .destinationType(BDMDestType.VOLUME)
+                            .uuid(effectiveImageId)
+                            .deleteOnTermination(true)
+                            .bootIndex(0);
+                    builder.blockDevice(volumeBuilder.build());
+                    break;
+            }
         }
 
         String hwid = opts.getHardwareId();
@@ -273,7 +325,6 @@ public class JCloudsSlaveTemplate implements Describable<JCloudsSlaveTemplate>, 
             builder.userData(Base64.encode(content.getBytes(Charsets.UTF_8)));
         }
 
-        final Openstack openstack = cloud.getOpenstack();
         final Server server = openstack.bootAndWaitActive(builder, opts.getStartTimeout());
         LOGGER.info("Provisioned: " + server.toString());
 

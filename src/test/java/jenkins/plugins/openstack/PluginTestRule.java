@@ -27,6 +27,8 @@ import hudson.slaves.NodeProvisioner;
 import hudson.util.FormValidation;
 import jenkins.plugins.openstack.compute.SlaveOptions;
 import jenkins.plugins.openstack.compute.UserDataConfig;
+import jenkins.plugins.openstack.compute.JCloudsCloud.BootSource;
+
 import org.jenkinsci.lib.configprovider.ConfigProvider;
 import org.jenkinsci.lib.configprovider.model.Config;
 import org.jenkinsci.plugins.resourcedisposer.AsyncResourceDisposer;
@@ -101,6 +103,7 @@ public final class PluginTestRule extends JenkinsRule {
         );
         // Use some real-looking values preserving defaults to make sure plugin works with them
         return JCloudsCloud.DescriptorImpl.getDefaultOptions().getBuilder()
+                .bootSource(BootSource.IMAGE)
                 .imageId("dummyImageId")
                 .hardwareId("dummyHardwareId")
                 .networkId("dummyNetworkId")

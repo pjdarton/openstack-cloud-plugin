@@ -175,6 +175,35 @@ public class JCloudsCloud extends Cloud implements SlaveOptions.Holder {
         public abstract boolean isReady(@Nonnull JCloudsSlave slave);
     }
 
+    public enum BootSource {
+        IMAGE {
+            public String toDisplayName() { return "Image"; }
+        },
+        VOLUMESNAPSHOT {
+            public String toDisplayName() { return "Volume Snapshot"; }
+        };
+        public abstract String toDisplayName();
+        /**
+         * Turns a string into an enum value.
+         * <p>
+         * Note: Unlike {@link #valueOf(String)} this returns null on failure.
+         * 
+         * @param s
+         *            The string form. This may be null.
+         * @return The enum whose {@link #name()}==s, or null if none match.
+         */
+        public static @CheckForNull BootSource fromString(String s) {
+            final String sOrNull = Util.fixEmpty(s);
+            if (sOrNull != null) {
+                for (final BootSource i : values()) {
+                    if (sOrNull.equals(i.name()))
+                        return i;
+                }
+            }
+            return null;
+        }
+    }
+
     public static @Nonnull List<JCloudsCloud> getClouds() {
         List<JCloudsCloud> clouds = new ArrayList<>();
         for (Cloud c : Jenkins.getActiveInstance().clouds) {
