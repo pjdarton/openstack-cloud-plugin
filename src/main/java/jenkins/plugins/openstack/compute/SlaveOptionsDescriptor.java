@@ -173,7 +173,7 @@ public final class SlaveOptionsDescriptor extends hudson.model.Descriptor<SlaveO
         final String valueOrEmpty = Util.fixNull(floatingIpPool);
         boolean existingValueFound = valueOrEmpty.isEmpty();
         try {
-            if (haveServerDetails(endPointUrl, identity, credential, zone)) {
+            if (haveAuthDetails(endPointUrl, identity, credential, zone)) {
                 final Openstack openstack = Openstack.Factory.get(endPointUrl, identity, credential, zone);
                 for (String p : openstack.getSortedIpPools()) {
                     m.add(p);
@@ -215,7 +215,7 @@ public final class SlaveOptionsDescriptor extends hudson.model.Descriptor<SlaveO
         final String valueOrEmpty = Util.fixNull(hardwareId);
         boolean existingValueFound = valueOrEmpty.isEmpty();
         try {
-            if (haveServerDetails(endPointUrl, identity, credential, zone)) {
+            if (haveAuthDetails(endPointUrl, identity, credential, zone)) {
                 final Openstack openstack = Openstack.Factory.get(endPointUrl, identity, credential, zone);
                 for (Flavor flavor : openstack.getSortedFlavors()) {
                     final String value = flavor.getId();
@@ -300,7 +300,7 @@ public final class SlaveOptionsDescriptor extends hudson.model.Descriptor<SlaveO
         m.add(new ListBoxModel.Option("None specified", "", existingValueFound));
         try {
             final JCloudsCloud.BootSource effectiveBS = calcBootSource(bootSource, defBootSource);
-            if (effectiveBS!=null && haveServerDetails(endPointUrl, identity, credential, zone)) {
+            if (effectiveBS!=null && haveAuthDetails(endPointUrl, identity, credential, zone)) {
                 final Openstack openstack = Openstack.Factory.get(endPointUrl, identity, credential, zone);
                 switch(effectiveBS) {
                     case IMAGE:
@@ -358,7 +358,7 @@ public final class SlaveOptionsDescriptor extends hudson.model.Descriptor<SlaveO
                 final String identity = getDefault(identityCloud, identityTemplate);
                 final String credential = getDefault(credentialCloud, credentialTemplate);
                 final String zone = getDefault(zoneCloud, zoneTemplate);
-                if (effectiveBootSource!=null && haveServerDetails(endPointUrl, identity, credential, zone)) {
+                if (effectiveBootSource!=null && haveAuthDetails(endPointUrl, identity, credential, zone)) {
                     final Openstack openstack = Openstack.Factory.get(endPointUrl, identity, credential, zone);
                     switch(effectiveBootSource) {
                         case IMAGE:
@@ -409,7 +409,7 @@ public final class SlaveOptionsDescriptor extends hudson.model.Descriptor<SlaveO
         final String valueOrEmpty = Util.fixNull(networkId);
         boolean existingValueFound = valueOrEmpty.isEmpty();
         try {
-            if (haveServerDetails(endPointUrl, identity, credential, zone)) {
+            if (haveAuthDetails(endPointUrl, identity, credential, zone)) {
                 Openstack openstack = Openstack.Factory.get(endPointUrl, identity, credential, zone);
                 for (org.openstack4j.model.network.Network network : openstack.getSortedNetworks()) {
                     final String value = network.getId();
@@ -555,7 +555,7 @@ public final class SlaveOptionsDescriptor extends hudson.model.Descriptor<SlaveO
         // Therefore we suggest some options if we can, but if we can't then we assume it's because they're not needed.
         final ComboBoxModel m = new ComboBoxModel();
         try {
-            if (haveServerDetails(endPointUrl, identity, credential, zone)) {
+            if (haveAuthDetails(endPointUrl, identity, credential, zone)) {
                 final Openstack openstack = Openstack.Factory.get(endPointUrl, identity, credential, zone);
                 for (final AvailabilityZone az : openstack.getAvailabilityZones()) {
                     final String value = az.getZoneName();
@@ -595,7 +595,7 @@ public final class SlaveOptionsDescriptor extends hudson.model.Descriptor<SlaveO
             final String identity = getDefault(identityCloud, identityTemplate);
             final String credential = getDefault(credentialCloud, credentialTemplate);
             final String zone = getDefault(zoneCloud, zoneTemplate);
-            if (haveServerDetails(endPointUrl, identity, credential, zone)) {
+            if (haveAuthDetails(endPointUrl, identity, credential, zone)) {
                 try {
                     final Openstack openstack = Openstack.Factory.get(endPointUrl, identity, credential, zone);
                     final int numberOfAZs = openstack.getAvailabilityZones().size();
@@ -623,7 +623,7 @@ public final class SlaveOptionsDescriptor extends hudson.model.Descriptor<SlaveO
         final String valueOrEmpty = Util.fixNull(keyPairName);
         boolean existingValueFound = valueOrEmpty.isEmpty();
         try {
-            if (haveServerDetails(endPointUrl, identity, credential, zone)) {
+            if (haveAuthDetails(endPointUrl, identity, credential, zone)) {
                 Openstack openstack = Openstack.Factory.get(endPointUrl, identity, credential, zone);
                 for (String value : openstack.getSortedKeyPairNames()) {
                     m.add(value);
@@ -719,7 +719,7 @@ public final class SlaveOptionsDescriptor extends hudson.model.Descriptor<SlaveO
         }
     }
 
-    private static boolean haveServerDetails(String endPointUrl, String identity, String credential, String zone) {
+    private static boolean haveAuthDetails(String endPointUrl, String identity, String credential, String zone) {
         return Util.fixEmpty(endPointUrl)!=null && Util.fixEmpty(identity)!=null && Util.fixEmpty(credential)!=null;
     }
 
