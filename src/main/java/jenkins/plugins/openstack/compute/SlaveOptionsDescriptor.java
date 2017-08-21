@@ -302,25 +302,11 @@ public final class SlaveOptionsDescriptor extends hudson.model.Descriptor<SlaveO
             final JCloudsCloud.BootSource effectiveBS = calcBootSource(bootSource, defBootSource);
             if (effectiveBS!=null && haveAuthDetails(endPointUrl, identity, credential, zone)) {
                 final Openstack openstack = Openstack.Factory.get(endPointUrl, identity, credential, zone);
-                switch(effectiveBS) {
-                    case IMAGE:
-                        final Map<String, Collection<Image>> images = openstack.getImages();
-                        for (String value : images.keySet()) {
-                            final String displayText = effectiveBS.toDisplayName() + " " + value;
-                            m.add(displayText, value);
-                            existingValueFound |= valueOrEmpty.equals(value);
-                        }
-                        break;
-                    case VOLUMESNAPSHOT:
-                        final Map<String, Collection<VolumeSnapshot>> volumeSnapshots = openstack.getVolumeSnapshots();
-                        for (String value : volumeSnapshots.keySet()) {
-                            final String displayText = effectiveBS.toDisplayName() + " " + value;
-                            m.add(displayText, value);
-                            existingValueFound |= valueOrEmpty.equals(value);
-                        }
-                        break;
-                    default:
-                        break;
+                final List<String> values = effectiveBS.findAllMatchingNames(openstack);
+                for (String value : values) {
+                    final String displayText = effectiveBS.toDisplayName() + " " + value;
+                    m.add(displayText, value);
+                    existingValueFound |= valueOrEmpty.equals(value);
                 }
             }
         } catch (AuthenticationException | FormValidation | ConnectionException ex) {
@@ -360,16 +346,7 @@ public final class SlaveOptionsDescriptor extends hudson.model.Descriptor<SlaveO
                 final String zone = getDefault(zoneCloud, zoneTemplate);
                 if (effectiveBootSource!=null && haveAuthDetails(endPointUrl, identity, credential, zone)) {
                     final Openstack openstack = Openstack.Factory.get(endPointUrl, identity, credential, zone);
-                    switch(effectiveBootSource) {
-                        case IMAGE:
-                            matches = openstack.getImageIdsFor(value);
-                            break;
-                        case VOLUMESNAPSHOT:
-                            matches = openstack.getVolumeSnapshotIdsFor(value);
-                            break;
-                        default:
-                            break;
-                    }
+                    matches = effectiveBootSource.findMatchingIds(openstack, value);
                 }
             } catch (AuthenticationException | FormValidation | ConnectionException ex) {
                 LOGGER.log(Level.FINEST, "Openstack call failed", ex);

@@ -235,19 +235,7 @@ public class JCloudsSlaveTemplate implements Describable<JCloudsSlaveTemplate>, 
         final String imageNameOrId = opts.getImageId();
         final String effectiveImageId;
         if (!Strings.isNullOrEmpty(imageNameOrId)) {
-            final List<String> ids;
-            switch (bootSource) {
-                case IMAGE :
-                    ids = openstack.getImageIdsFor(imageNameOrId);
-                    break;
-                case VOLUMESNAPSHOT :
-                    ids = openstack.getVolumeSnapshotIdsFor(imageNameOrId);
-                    break;
-                default :
-                    LOGGER.config("Don't know how to handle bootSource of " + bootSource + ".");
-                    ids = Collections.EMPTY_LIST;
-                    break;
-            }
+            final List<String> ids = bootSource.findMatchingIds(openstack, imageNameOrId);
             final int numberFound = ids.size();
             switch (numberFound) {
                 case 0 :
@@ -267,22 +255,8 @@ public class JCloudsSlaveTemplate implements Describable<JCloudsSlaveTemplate>, 
             effectiveImageId = null;
         }
         if (effectiveImageId != null) {
-            switch (bootSource) {
-                case IMAGE :
-                    LOGGER.fine("Setting image id to " + effectiveImageId);
-                    builder.image(effectiveImageId);
-                    break;
-                case VOLUMESNAPSHOT :
-                    LOGGER.fine("Setting blockDevice to volume created from VolumeSnapshot " + effectiveImageId);
-                    BlockDeviceMappingBuilder volumeBuilder = Builders.blockDeviceMapping()
-                            .sourceType(BDMSourceType.SNAPSHOT)
-                            .destinationType(BDMDestType.VOLUME)
-                            .uuid(effectiveImageId)
-                            .deleteOnTermination(true)
-                            .bootIndex(0);
-                    builder.blockDevice(volumeBuilder.build());
-                    break;
-            }
+            LOGGER.fine("Setting boot image to " + bootSource.toDisplayName() + " " + effectiveImageId);
+            bootSource.setServerBootSource(builder, effectiveImageId);
         }
 
         String hwid = opts.getHardwareId();
