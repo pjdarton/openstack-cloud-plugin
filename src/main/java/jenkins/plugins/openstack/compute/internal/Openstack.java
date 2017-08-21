@@ -204,7 +204,7 @@ public class Openstack {
     };
 
     /**
-     * Finds all {@link VolumeSnapshot}s.
+     * Finds all {@link VolumeSnapshot}s that are {@link Volume.Status#AVAILABLE}.
      * 
      * @return A Map of collections of {@link VolumeSnapshot}s, indexed by name
      *         (or id if the volume snapshot has no name) in ascending order
@@ -215,6 +215,9 @@ public class Openstack {
         final List<? extends VolumeSnapshot> list = clientProvider.get().blockStorage().snapshots().list();
         final TreeMultimap<String, VolumeSnapshot> set = TreeMultimap.create(String.CASE_INSENSITIVE_ORDER, VOLUMESNAPSHOT_DATE_COMPARATOR);
         for (VolumeSnapshot o : list) {
+            if (o.getStatus() != Volume.Status.AVAILABLE) {
+                continue;
+            }
             final String name = Util.fixNull(o.getName());
             final String nameOrId = name.isEmpty() ? o.getId() : name;
             set.put(nameOrId, o);
@@ -344,7 +347,7 @@ public class Openstack {
     }
 
     /**
-     * Finds the Id(s) of all active {@link VolumeSnapshot}s with the given name
+     * Finds the Id(s) of all available {@link VolumeSnapshot}s with the given name
      * or ID. If we have found multiple {@link VolumeSnapshot}s then they will
      * be listed in ascending date order (oldest first).
      * 
@@ -358,11 +361,7 @@ public class Openstack {
         final Map<String, Collection<VolumeSnapshot>> allVolumeSnapshots = getVolumeSnapshots();
         final Collection<VolumeSnapshot> findByName = allVolumeSnapshots.get(nameOrId);
         if (findByName != null) {
-            for (VolumeSnapshot o : findByName) {
-                if (o.getStatus() == Volume.Status.AVAILABLE) {
-                    sortedObjects.add(o);
-                }
-            }
+            sortedObjects.addAll(findByName);
         }
         if (nameOrId.matches("[0-9a-f-]{36}")) {
             final VolumeSnapshot findById = clientProvider.get().blockStorage().snapshots().get(nameOrId);
