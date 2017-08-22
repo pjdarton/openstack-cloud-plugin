@@ -377,6 +377,23 @@ public class Openstack {
     }
 
     /**
+     * Sets the name and description of a {@link Volume}. These will be visible
+     * if a user looks at volumes using the OpenStack command-line or WebUI.
+     * 
+     * @param volumeId
+     *            The ID of the volume whose name and description are to be set.
+     * @param newVolumeName
+     *            The new name for the volume.
+     * @param newVolumeDescription
+     *            The new description for the volume.
+     */
+    public void setVolumeNameAndDescription(String volumeId, String newVolumeName, String newVolumeDescription) {
+        final ActionResponse res = clientProvider.get().blockStorage().volumes().update(volumeId, newVolumeName,
+                newVolumeDescription);
+        throwIfFailed(res);
+    }
+
+    /**
      * Determine whether the server is considered occupied by openstack plugin.
      */
     private static boolean isOccupied(@Nonnull Server server) {

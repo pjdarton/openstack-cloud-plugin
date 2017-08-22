@@ -24,10 +24,7 @@ import org.kohsuke.accmod.restrictions.NoExternalUse;
 import org.kohsuke.stapler.DataBoundConstructor;
 import org.kohsuke.stapler.QueryParameter;
 import org.openstack4j.api.Builders;
-import org.openstack4j.model.compute.BDMDestType;
-import org.openstack4j.model.compute.BDMSourceType;
 import org.openstack4j.model.compute.Server;
-import org.openstack4j.model.compute.builder.BlockDeviceMappingBuilder;
 import org.openstack4j.model.compute.builder.ServerCreateBuilder;
 
 import com.google.common.base.Strings;
@@ -299,24 +296,27 @@ public class JCloudsSlaveTemplate implements Describable<JCloudsSlaveTemplate>, 
             builder.userData(Base64.encode(content.getBytes(Charsets.UTF_8)));
         }
 
-        final Server server = openstack.bootAndWaitActive(builder, opts.getStartTimeout());
-        LOGGER.info("Provisioned: " + server.toString());
+        Server server = openstack.bootAndWaitActive(builder, opts.getStartTimeout());
 
-        String poolName = opts.getFloatingIpPool();
-        if (poolName != null) {
-            LOGGER.fine("Assigning floating IP from " + poolName + " to " + serverName);
-            try {
+        try {
+            if (effectiveImageId != null) {
+                bootSource.afterProvisioning(server, openstack, effectiveImageId);
+            }
+            String poolName = opts.getFloatingIpPool();
+            if (poolName != null) {
+                LOGGER.fine("Assigning floating IP from " + poolName + " to " + serverName);
                 openstack.assignFloatingIp(server, poolName);
                 // Make sure address information is reflected in metadata
-                return openstack.updateInfo(server);
-            } catch (Throwable ex) {
-                // Do not leak the server as we are aborting the provisioning
-                AsyncResourceDisposer.get().dispose(new DestroyMachine(cloud.name, server.getId()));
-                throw ex;
+                server = openstack.updateInfo(server);
             }
-        }
 
-        return server;
+            LOGGER.info("Provisioned: " + server.toString());
+            return server;
+        } catch (Throwable ex) {
+            // Do not leak the server as we are aborting the provisioning
+            AsyncResourceDisposer.get().dispose(new DestroyMachine(cloud.name, server.getId()));
+            throw ex;
+        }
     }
 
     private static String[] csvToArray(final String csv) {

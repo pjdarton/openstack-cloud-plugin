@@ -185,7 +185,7 @@ public class JCloudsCloud extends Cloud implements SlaveOptions.Holder {
             public String toDisplayName() { return "Image"; }
 
             @Override
-            public List<String> findAllMatchingNames(Openstack openstack) {
+            public List<String> listAllNames(Openstack openstack) {
                 final Map<String, ?> images = openstack.getImages();
                 final List<String> allNames = new ArrayList<String>(images.size());
                 allNames.addAll(images.keySet());
@@ -201,12 +201,16 @@ public class JCloudsCloud extends Cloud implements SlaveOptions.Holder {
             public void setServerBootSource(ServerCreateBuilder builder,  String id) {
                 builder.image(id);
             }
+
+            @Override
+            public void afterProvisioning(Server server, Openstack openstack, String id) {
+            }
         },
         VOLUMESNAPSHOT {
             public String toDisplayName() { return "Volume Snapshot"; }
 
             @Override
-            public List<String> findAllMatchingNames(Openstack openstack) {
+            public List<String> listAllNames(Openstack openstack) {
                 final Map<String, ?> images = openstack.getVolumeSnapshots();
                 final List<String> allNames = new ArrayList<String>(images.size());
                 allNames.addAll(images.keySet());
@@ -228,6 +232,25 @@ public class JCloudsCloud extends Cloud implements SlaveOptions.Holder {
                         .bootIndex(0);
                 builder.blockDevice(volumeBuilder.build());
             }
+
+            @Override
+            public void afterProvisioning(Server server, Openstack openstack, String id) {
+                /*
+                 * OpenStack creates a Volume for the Instance to boot from but
+                 * it does not give that Volume a name or description. We do
+                 * this so that humans can recognize those Volumes.
+                 */
+                final List<String> volumeIds = server.getOsExtendedVolumesAttached();
+                final String instanceId = server.getId();
+                final String instanceName = server.getName();
+                int i = 0;
+                final String newVolumeDescription = "For " + instanceName + " (" + instanceId
+                        + "), from VolumeSnapshot " + id + ".";
+                for (final String volumeId : volumeIds) {
+                    final String newVolumeName = instanceName + '[' + (i++) + ']';
+                    openstack.setVolumeNameAndDescription(volumeId, newVolumeName, newVolumeDescription);
+                }
+            }
         };
         /** Human-readable name of this kind of {@link BootSource}. */
         public abstract String toDisplayName();
@@ -237,20 +260,20 @@ public class JCloudsCloud extends Cloud implements SlaveOptions.Holder {
          * user could choose between.
          * 
          * @param openstack
-         *            Means of communicating with the OpenStack server.
+         *            Means of communicating with the OpenStack service.
          */
-        public abstract List<String> findAllMatchingNames(Openstack openstack);
+        public abstract List<String> listAllNames(Openstack openstack);
 
         /**
          * Lists all the IDs (of this kind of {@link BootSource}) matching the
          * given nameOrId.
          * 
          * @param openstack
-         *            Means of communicating with the OpenStack server.
+         *            Means of communicating with the OpenStack service.
          * @param nameOrId
          *            The user's selected name (or ID). This is most likely a
          *            value previously returned by
-         *            {@link #findAllMatchingNames(Openstack)}.
+         *            {@link #listAllNames(Openstack)}.
          */
         public abstract List<String> findMatchingIds(Openstack openstack, String nameOrId);
 
@@ -268,6 +291,20 @@ public class JCloudsCloud extends Cloud implements SlaveOptions.Holder {
          *            {@link #findMatchingIds(Openstack, String)}.
          */
         public abstract void setServerBootSource(ServerCreateBuilder builder, String id);
+
+        /**
+         * Called after a server has been provisioned.
+         * 
+         * @param server
+         *            The newly-provisioned server.
+         * @param openstack
+         *            Means of communicating with the OpenStack service.
+         * @param id
+         *            The ID (of this kind of {@link BootSource}) that was
+         *            previously passed to
+         *            {@link #setServerBootSource(ServerCreateBuilder, String)}.
+         */
+        public abstract void afterProvisioning(Server server, Openstack openstack, String id);
 
         /**
          * Turns a string into an enum value.
