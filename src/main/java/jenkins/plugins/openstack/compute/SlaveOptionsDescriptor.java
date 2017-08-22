@@ -70,6 +70,7 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -171,13 +172,11 @@ public final class SlaveOptionsDescriptor extends hudson.model.Descriptor<SlaveO
         ListBoxModel m = new ListBoxModel();
         m.add("None specified", "");
         final String valueOrEmpty = Util.fixNull(floatingIpPool);
-        boolean existingValueFound = valueOrEmpty.isEmpty();
         try {
             if (haveAuthDetails(endPointUrl, identity, credential, zone)) {
                 final Openstack openstack = Openstack.Factory.get(endPointUrl, identity, credential, zone);
                 for (String p : openstack.getSortedIpPools()) {
                     m.add(p);
-                    existingValueFound |= valueOrEmpty.equals(p);
                 }
             }
         } catch (AuthenticationException | FormValidation | ConnectionException ex) {
@@ -185,7 +184,7 @@ public final class SlaveOptionsDescriptor extends hudson.model.Descriptor<SlaveO
         } catch (Exception ex) {
             LOGGER.log(Level.SEVERE, ex.getMessage(), ex);
         }
-        if (!existingValueFound) {
+        if (!hasValue(m, valueOrEmpty)) {
             m.add(valueOrEmpty);
         }
         return m;
@@ -213,7 +212,6 @@ public final class SlaveOptionsDescriptor extends hudson.model.Descriptor<SlaveO
         ListBoxModel m = new ListBoxModel();
         m.add("None specified", "");
         final String valueOrEmpty = Util.fixNull(hardwareId);
-        boolean existingValueFound = valueOrEmpty.isEmpty();
         try {
             if (haveAuthDetails(endPointUrl, identity, credential, zone)) {
                 final Openstack openstack = Openstack.Factory.get(endPointUrl, identity, credential, zone);
@@ -221,7 +219,6 @@ public final class SlaveOptionsDescriptor extends hudson.model.Descriptor<SlaveO
                     final String value = flavor.getId();
                     final String displayText = String.format("%s (%s)", flavor.getName(), value);
                     m.add(displayText, value);
-                    existingValueFound |= valueOrEmpty.equals(value);
                 }
             }
         } catch (AuthenticationException | FormValidation | ConnectionException ex) {
@@ -229,7 +226,7 @@ public final class SlaveOptionsDescriptor extends hudson.model.Descriptor<SlaveO
         } catch (Exception ex) {
             LOGGER.log(Level.SEVERE, ex.getMessage(), ex);
         }
-        if (!existingValueFound) {
+        if (!hasValue(m, valueOrEmpty)) {
             m.add(hardwareId);
         }
         return m;
@@ -296,17 +293,15 @@ public final class SlaveOptionsDescriptor extends hudson.model.Descriptor<SlaveO
     ) {
         ListBoxModel m = new ListBoxModel();
         final String valueOrEmpty = Util.fixNull(imageId);
-        boolean existingValueFound = valueOrEmpty.isEmpty();
-        m.add(new ListBoxModel.Option("None specified", "", existingValueFound));
+        m.add(new ListBoxModel.Option("None specified", "", valueOrEmpty.isEmpty()));
         try {
             final JCloudsCloud.BootSource effectiveBS = calcBootSource(bootSource, defBootSource);
             if (effectiveBS!=null && haveAuthDetails(endPointUrl, identity, credential, zone)) {
                 final Openstack openstack = Openstack.Factory.get(endPointUrl, identity, credential, zone);
-                final List<String> values = effectiveBS.findAllMatchingNames(openstack);
+                final List<String> values = effectiveBS.listAllNames(openstack);
                 for (String value : values) {
                     final String displayText = effectiveBS.toDisplayName() + " " + value;
                     m.add(displayText, value);
-                    existingValueFound |= valueOrEmpty.equals(value);
                 }
             }
         } catch (AuthenticationException | FormValidation | ConnectionException ex) {
@@ -314,7 +309,7 @@ public final class SlaveOptionsDescriptor extends hudson.model.Descriptor<SlaveO
         } catch (Exception ex) {
             LOGGER.log(Level.SEVERE, ex.getMessage(), ex);
         }
-        if (!existingValueFound) {
+        if (!hasValue(m, valueOrEmpty)) {
             m.add(imageId);
         }
         return m;
@@ -384,7 +379,6 @@ public final class SlaveOptionsDescriptor extends hudson.model.Descriptor<SlaveO
         ListBoxModel m = new ListBoxModel();
         m.add("None specified", "");
         final String valueOrEmpty = Util.fixNull(networkId);
-        boolean existingValueFound = valueOrEmpty.isEmpty();
         try {
             if (haveAuthDetails(endPointUrl, identity, credential, zone)) {
                 Openstack openstack = Openstack.Factory.get(endPointUrl, identity, credential, zone);
@@ -392,7 +386,6 @@ public final class SlaveOptionsDescriptor extends hudson.model.Descriptor<SlaveO
                     final String value = network.getId();
                     final String displayText = String.format("%s (%s)", network.getName(), value);
                     m.add(displayText, value);
-                    existingValueFound |= valueOrEmpty.equals(value);
                 }
             }
         } catch (AuthenticationException | FormValidation | ConnectionException ex) {
@@ -400,7 +393,7 @@ public final class SlaveOptionsDescriptor extends hudson.model.Descriptor<SlaveO
         } catch (Exception ex) {
             LOGGER.log(Level.SEVERE, ex.getMessage(), ex);
         }
-        if (!existingValueFound) {
+        if (!hasValue(m, valueOrEmpty)) {
             m.add(networkId);
         }
         return m;
@@ -598,13 +591,11 @@ public final class SlaveOptionsDescriptor extends hudson.model.Descriptor<SlaveO
         ListBoxModel m = new ListBoxModel();
         m.add("None specified", "");
         final String valueOrEmpty = Util.fixNull(keyPairName);
-        boolean existingValueFound = valueOrEmpty.isEmpty();
         try {
             if (haveAuthDetails(endPointUrl, identity, credential, zone)) {
                 Openstack openstack = Openstack.Factory.get(endPointUrl, identity, credential, zone);
                 for (String value : openstack.getSortedKeyPairNames()) {
                     m.add(value);
-                    existingValueFound |= valueOrEmpty.equals(value);
                 }
             }
         } catch (AuthenticationException | FormValidation | ConnectionException ex) {
@@ -612,7 +603,7 @@ public final class SlaveOptionsDescriptor extends hudson.model.Descriptor<SlaveO
         } catch (Exception ex) {
             LOGGER.log(Level.SEVERE, ex.getMessage(), ex);
         }
-        if (!existingValueFound) {
+        if (!hasValue(m, valueOrEmpty)) {
             m.add(keyPairName);
         }
         return m;
@@ -694,6 +685,15 @@ public final class SlaveOptionsDescriptor extends hudson.model.Descriptor<SlaveO
         if (!deps.isEmpty()) {
             attributes.put("fillDependsOn", Joiner.on(' ').join(deps));
         }
+    }
+
+    private static boolean hasValue(ListBoxModel m, String value) {
+        for( final ListBoxModel.Option o : m) {
+            if ( Objects.equals(value, o.value)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static boolean haveAuthDetails(String endPointUrl, String identity, String credential, String zone) {
