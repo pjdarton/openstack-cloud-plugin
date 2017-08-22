@@ -10,6 +10,7 @@ import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -363,6 +364,7 @@ public final class PluginTestRule extends JenkinsRule {
             when(server.getAddresses()).thenReturn(new NovaAddresses());
             when(server.getStatus()).thenReturn(Server.Status.ACTIVE);
             when(server.getMetadata()).thenReturn(metadata);
+            when(server.getOsExtendedVolumesAttached()).thenReturn(Collections.singletonList(UUID.randomUUID().toString()));
             metadata.put("jenkins-instance", jenkins.getRootUrl()); // Mark the slave as ours
         }
 
