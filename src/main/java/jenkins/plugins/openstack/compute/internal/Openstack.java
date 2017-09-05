@@ -35,6 +35,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.TreeSet;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -48,6 +50,8 @@ import com.google.common.base.Objects;
 import com.google.common.cache.Cache;
 import com.google.common.cache.CacheBuilder;
 import com.google.common.collect.TreeMultimap;
+import com.google.common.util.concurrent.UncheckedExecutionException;
+
 import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import hudson.Extension;
 import hudson.ExtensionList;
@@ -73,6 +77,7 @@ import org.openstack4j.model.compute.Flavor;
 import org.openstack4j.model.compute.FloatingIP;
 import org.openstack4j.model.compute.Keypair;
 import org.openstack4j.model.compute.Server;
+import org.openstack4j.model.compute.ServerCreate;
 import org.openstack4j.model.compute.builder.ServerCreateBuilder;
 import org.openstack4j.model.compute.ext.AvailabilityZone;
 import org.openstack4j.model.identity.v2.Access;
@@ -107,15 +112,19 @@ public class Openstack {
     public static final String FINGERPRINT_KEY = "jenkins-instance";
 
     // Store the OS session token so clients can be created from it per all threads using this.
-    private final ClientProvider clientProvider;
+    private final ClientProvider<?> clientProvider;
+
+    // Used when calculating differences between our clock and the OpenStack endpoint's clock.
+    private final long instanceCreationTimeMillis;
 
     private Openstack(@Nonnull String endPointUrl, @Nonnull String identity, @Nonnull Secret credential, @CheckForNull String region) {
+        instanceCreationTimeMillis = System.currentTimeMillis();
         // TODO refactor to split tenant:username everywhere including UI
         String[] id = identity.split(":", 3);
         String tenant = id.length > 0 ? id[0] : "";
         String username = id.length > 1 ? id[1] : "";
         String domain = id.length > 2 ? id[2] : "";
-        final IOSClientBuilder<? extends OSClient, ?> builder;
+        final IOSClientBuilder<? extends OSClient<?>, ?> builder;
         if (domain.equals("")) {
             //If domain is empty it is assumed that is being used API V2
             builder = OSFactory.builderV2().endpoint(endPointUrl)
@@ -129,7 +138,7 @@ public class Openstack {
                      .credentials(username, credential.getPlainText(), iDomain)
                      .scopeToProject(project, iDomain);
         }
-        OSClient client = builder
+        OSClient<?> client = builder
                 .authenticate()
                 .useRegion(region)
         ;
@@ -139,27 +148,71 @@ public class Openstack {
     }
 
     /*exposed for testing*/
-    public Openstack(@Nonnull final OSClient client) {
+    public Openstack(@Nonnull final OSClient<?> client) {
+        instanceCreationTimeMillis = System.currentTimeMillis();
         this.clientProvider = new ClientProvider<Void>(null) {
-            @Override public @Nonnull OSClient get() {
+            @Override public @Nonnull OSClient<?> get() {
                 return client;
             }
 
             @Override public Date _getExpires() {
                 return ClientProvider.get(client).getExpires();
             }
+
+            @Override
+            protected Date _getIssued() {
+                return ClientProvider.get(client).getIssued();
+            }
         };
     }
 
     /**
-     * Date representing time until this instance is valid to be used.
+     * Date representing when this instance's login session is no longer valid.
+     * <p>
+     * <b>NOTE:</b> This is supplied by the OpenStack service endpoint so it may
+     * be offset if the OpenStack endpoint's clock differs from our own.
+     * </p>
      */
     public @Nonnull Date getExpires() {
         return clientProvider.getExpires();
     }
 
+    /**
+     * Date representing when this instance's login session was started, or null
+     * if the authentication method cannot provide that data.
+     * <p>
+     * <b>NOTE:</b> This is supplied by the OpenStack service endpoint so it may
+     * be offset if the OpenStack endpoint's clock differs from our own.
+     */
+    public @CheckForNull Date getIssued() {
+        return clientProvider.getIssued();
+    }
+
+    /**
+     * System clock (from {@link System#currentTimeMillis()}) representing when
+     * this instance's login session was started according to our own clock.
+     * <p>
+     * <b>NOTE:</b> If the OpenStack service endpoint's clock is perfectly in
+     * sync with ours and logging in takes no time at all then this will be
+     * equal to {@link #getIssued()}.
+     * </p>
+     */
+    public long getLoginTimeMillis() {
+        return instanceCreationTimeMillis;
+    }
+
+    /** Cache results of OSClient.networking().network().list() between threads as it doesn't change much. */
+    private final CacheableData<List<? extends Network>> cachedNetworkingNetworkListProvider = new CachedData<List<? extends Network>>(
+            15) {
+        @Override
+        protected List<? extends Network> calculate() {
+            LOGGER.log(Level.FINER, "{0}:{1} calling networking().network().list()", new Object[]{ this, Thread.currentThread() });
+            return Collections.unmodifiableList(clientProvider.get().networking().network().list());
+        }
+    };
+
     public @Nonnull Collection<? extends Network> getSortedNetworks() {
-        List<? extends Network> nets = clientProvider.get().networking().network().list();
+        List<? extends Network> nets = new ArrayList<>(cachedNetworkingNetworkListProvider.get());
         Collections.sort(nets, RESOURCE_COMPARATOR);
         return nets;
     }
@@ -172,6 +225,19 @@ public class Openstack {
     };
 
     /**
+     * Cache results of OSClient.images().listAll() between threads as it
+     * doesn't change much.
+     */
+    private final CacheableData<List<? extends Image>> cachedImagesListAllProvider = new CachedData<List<? extends Image>>(
+            15) {
+        @Override
+        protected List<? extends Image> calculate() {
+            LOGGER.log(Level.FINER, "{0}:{1} calling images().listAll()", new Object[]{this, Thread.currentThread()});
+            return Collections.unmodifiableList(clientProvider.get().images().listAll());
+        }
+    };
+
+    /**
      * Finds all {@link Image}s.
      * 
      * @return A Map of collections of images, indexed by name (or id if the
@@ -180,7 +246,7 @@ public class Openstack {
      *         creation date.
      */
     public @Nonnull Map<String, Collection<Image>> getImages() {
-        final List<? extends Image> list = clientProvider.get().images().listAll();
+        final List<? extends Image> list = new ArrayList<>(cachedImagesListAllProvider.get());
         final TreeMultimap<String, Image> set = TreeMultimap.create(String.CASE_INSENSITIVE_ORDER, IMAGE_DATE_COMPARATOR);
         for (Image o : list) {
             final String name = Util.fixNull(o.getName());
@@ -204,6 +270,19 @@ public class Openstack {
     };
 
     /**
+     * Cache results of OSClient.blockStorage().snapshots().list() between
+     * threads as it doesn't change much.
+     */
+    private final CacheableData<List<? extends VolumeSnapshot>> cachedBlockStorageSnapshotsListProvider = new CachedData<List<? extends VolumeSnapshot>>(
+            15) {
+        @Override
+        protected List<? extends VolumeSnapshot> calculate() {
+            LOGGER.log(Level.FINER, "{0}:{1} calling blockStorage().snapshots().list()", new Object[]{this, Thread.currentThread()});
+            return Collections.unmodifiableList(clientProvider.get().blockStorage().snapshots().list());
+        }
+    };
+
+    /**
      * Finds all {@link VolumeSnapshot}s that are {@link Volume.Status#AVAILABLE}.
      * 
      * @return A Map of collections of {@link VolumeSnapshot}s, indexed by name
@@ -212,7 +291,7 @@ public class Openstack {
      *         given name are sorted by creation date.
      */
     public @Nonnull Map<String, Collection<VolumeSnapshot>> getVolumeSnapshots() {
-        final List<? extends VolumeSnapshot> list = clientProvider.get().blockStorage().snapshots().list();
+        final List<? extends VolumeSnapshot> list = cachedBlockStorageSnapshotsListProvider.get();
         final TreeMultimap<String, VolumeSnapshot> set = TreeMultimap.create(String.CASE_INSENSITIVE_ORDER, VOLUMESNAPSHOT_DATE_COMPARATOR);
         for (VolumeSnapshot o : list) {
             if (o.getStatus() != Volume.Status.AVAILABLE) {
@@ -236,8 +315,21 @@ public class Openstack {
         }
     };
 
+    /**
+     * Cache results of OSClient.compute().flavors().list() between threads as
+     * it doesn't change much.
+     */
+    private final CacheableData<List<? extends Flavor>> cachedComputeFlavorsListProvider = new CachedData<List<? extends Flavor>>(
+            15) {
+        @Override
+        protected List<? extends Flavor> calculate() {
+            LOGGER.log(Level.FINER, "{0}:{1} calling compute().flavors().list()", new Object[]{this, Thread.currentThread()});
+            return Collections.unmodifiableList(clientProvider.get().compute().flavors().list());
+        }
+    };
+
     public @Nonnull Collection<? extends Flavor> getSortedFlavors() {
-        List<? extends Flavor> flavors = clientProvider.get().compute().flavors().list();
+        List<? extends Flavor> flavors = new ArrayList<>(cachedComputeFlavorsListProvider.get());
         Collections.sort(flavors, FLAVOR_COMPARATOR);
         return flavors;
     }
@@ -249,18 +341,46 @@ public class Openstack {
         }
     };
 
-    public @Nonnull List<String> getSortedIpPools() {
-        ComputeFloatingIPService ipService = getComputeFloatingIPService();
-        if (ipService == null) return Collections.emptyList();
+    /**
+     * Cache results of OSClient.compute().zones().list() between threads as it
+     * doesn't change much.
+     */
+    private final CacheableData<List<String>> cachedFloatingIPPoolNamesProvider = new CachedData<List<String>>(
+            15) {
+        @Override
+        protected List<String> calculate() {
+            ComputeFloatingIPService ipService = getComputeFloatingIPService();
+            if (ipService == null) return null;
+            LOGGER.log(Level.FINER, "{0}:{1} calling compute().floatingIps().getPoolNames()", new Object[]{this, Thread.currentThread()});
+            return Collections.unmodifiableList(ipService.getPoolNames());
+        }
+    };
 
-        List<String> names = new ArrayList<>(ipService.getPoolNames());
+    public @Nonnull List<String> getSortedIpPools() {
+        final List<String> namesOrNull = cachedFloatingIPPoolNamesProvider.get();
+        if (namesOrNull == null) return Collections.emptyList();
+
+        List<String> names = new ArrayList<>(namesOrNull);
         Collections.sort(names);
         return names;
     }
 
+    /**
+     * Cache results of OSClient.compute().zones().list() between threads as it
+     * doesn't change much.
+     */
+    private final CacheableData<List<? extends AvailabilityZone>> cachedComputeZonesListProvider = new CachedData<List<? extends AvailabilityZone>>(
+            15) {
+        @Override
+        protected List<? extends AvailabilityZone> calculate() {
+            LOGGER.log(Level.FINER, "{0}:{1} calling compute().zones().list()", new Object[]{this, Thread.currentThread()});
+            return Collections.unmodifiableList(clientProvider.get().compute().zones().list());
+        }
+    };
+
     public @Nonnull
     List<? extends AvailabilityZone> getAvailabilityZones(){
-        final List<? extends AvailabilityZone> zones = clientProvider.get().compute().zones().list();
+        final List<? extends AvailabilityZone> zones = new ArrayList<>(cachedComputeZonesListProvider.get());
         Collections.sort(zones, AVAILABILITY_ZONES_COMPARATOR);
         return zones;
     }
@@ -290,6 +410,8 @@ public class Openstack {
 
         // We need details to inspect state and metadata
         final boolean detailed = true;
+        // do not cache this as it can change every second
+        LOGGER.log(Level.FINER, "{0}:{1} calling compute().servers().list({2})", new Object[]{this, Thread.currentThread(), detailed});
         for (Server n: clientProvider.get().compute().servers().list(detailed)) {
             if (isOccupied(n) && isOurs(n)) {
                 running.add(n);
@@ -301,6 +423,8 @@ public class Openstack {
 
     public List<String> getFreeFipIds() {
         ArrayList<String> free = new ArrayList<>();
+        // do not cache this as it can change every second
+        LOGGER.log(Level.FINER, "{0}:{1} calling networking().floatingip().list()", new Object[]{this, Thread.currentThread()});
         for (NetFloatingIP ip : clientProvider.get().networking().floatingip().list()) {
             if (ip.getFixedIpAddress() == null) {
                 free.add(ip.getId());
@@ -309,13 +433,43 @@ public class Openstack {
         return free;
     }
 
+    /**
+     * Cache results of OSClient.compute().keypairs().list() between threads as it
+     * doesn't change much.
+     */
+    private final CacheableData<List<? extends Keypair>> cachedComputeKeypairsListProvider = new CachedData<List<? extends Keypair>>(
+            15) {
+        @Override
+        protected List<? extends Keypair> calculate() {
+            LOGGER.log(Level.FINER, "{0}:{1} calling compute().keypairs().list()", new Object[]{this, Thread.currentThread()});
+            return Collections.unmodifiableList(clientProvider.get().compute().keypairs().list());
+        }
+    };
+
     public @Nonnull List<String> getSortedKeyPairNames() {
-        List<String> keyPairs = new ArrayList<>();
-        for (Keypair kp : clientProvider.get().compute().keypairs().list()) {
+        final List<String> keyPairs = new ArrayList<>();
+        for (Keypair kp : cachedComputeKeypairsListProvider.get()) {
             keyPairs.add(kp.getName());
         }
+        Collections.sort(keyPairs);
         return keyPairs;
     }
+
+    /**
+     * Cache results of OSClient.images().listAll(query) between threads as it
+     * doesn't change much.
+     */
+    private final CacheableFunction<String, List<? extends Image>> cachedImagesListAllForNameProvider = new CachedFunction<String, List<? extends Image>>(
+            15) {
+        @Override
+        protected List<? extends Image> calculate(String nameOrId) {
+            final Map<String, String> query = new HashMap<>(2);
+            query.put("name", nameOrId);
+            query.put("status", "active");
+            LOGGER.log(Level.FINER, "{0}:{1} calling images().listAll(name={2})", new Object[]{this, Thread.currentThread(), nameOrId});
+            return Collections.unmodifiableList(clientProvider.get().images().listAll(query));
+        }
+    };
 
     /**
      * Finds the Id(s) of all active {@link Image}s with the given name or ID.
@@ -328,12 +482,10 @@ public class Openstack {
      */
     public @Nonnull List<String> getImageIdsFor(String nameOrId) {
         final Collection<Image> sortedObjects = new TreeSet<>(IMAGE_DATE_COMPARATOR);
-        final Map<String, String> query = new HashMap<>(2);
-        query.put("name", nameOrId);
-        query.put("status", "active");
-        final List<? extends Image> findByName = clientProvider.get().images().listAll(query);
+        final List<? extends Image> findByName = cachedImagesListAllForNameProvider.get(nameOrId);
         sortedObjects.addAll(findByName);
         if (nameOrId.matches("[0-9a-f-]{36}")) {
+            LOGGER.log(Level.FINER, "{0}:{1} calling images().get({2})", new Object[]{this, Thread.currentThread(), nameOrId});
             final Image findById = clientProvider.get().images().get(nameOrId);
             if (findById != null && findById.getStatus() == Image.Status.ACTIVE) {
                 sortedObjects.add(findById);
@@ -364,6 +516,7 @@ public class Openstack {
             sortedObjects.addAll(findByName);
         }
         if (nameOrId.matches("[0-9a-f-]{36}")) {
+            LOGGER.log(Level.FINER, "{0}:{1} calling blockStorage().snapshots().get({2})", new Object[]{this, Thread.currentThread(), nameOrId});
             final VolumeSnapshot findById = clientProvider.get().blockStorage().snapshots().get(nameOrId);
             if (findById != null && findById.getStatus() == Volume.Status.AVAILABLE) {
                 sortedObjects.add(findById);
@@ -388,6 +541,8 @@ public class Openstack {
      *            The new description for the volume.
      */
     public void setVolumeNameAndDescription(String volumeId, String newVolumeName, String newVolumeDescription) {
+        LOGGER.log(Level.FINER, "{0}:{1} calling blockStorage().volumes().update({2},\"{3}\",\"{4}\")", new Object[]{this, Thread.currentThread(), volumeId, newVolumeName,
+                newVolumeDescription});
         final ActionResponse res = clientProvider.get().blockStorage().volumes().update(volumeId, newVolumeName,
                 newVolumeDescription);
         throwIfFailed(res);
@@ -425,6 +580,8 @@ public class Openstack {
     }
 
     public @Nonnull Server getServerById(@Nonnull String id) throws NoSuchElementException {
+        // do not cache this as it can change every second
+        LOGGER.log(Level.FINER, "{0}:{1} calling compute().servers().get({2})", new Object[]{this, Thread.currentThread(), id});
         Server server = clientProvider.get().compute().servers().get(id);
         if (server == null) throw new NoSuchElementException("No such server running: " + id);
         return server;
@@ -432,6 +589,8 @@ public class Openstack {
 
     public @Nonnull List<Server> getServersByName(@Nonnull String name) {
         List<Server> ret = new ArrayList<>();
+        // do not cache this as it can change every second
+        LOGGER.log(Level.FINER, "{0}:{1} calling compute().servers().list(name={2})", new Object[]{this, Thread.currentThread(), name});
         for (Server server : clientProvider.get().compute().servers().list(Collections.singletonMap("name", name))) {
             if (isOurs(server)) {
                 ret.add(server);
@@ -482,7 +641,9 @@ public class Openstack {
     @Restricted(NoExternalUse.class) // Test hook
     public Server _bootAndWaitActive(@Nonnull ServerCreateBuilder request, @Nonnegative int timeout) {
         request.addMetadataItem(FINGERPRINT_KEY, instanceFingerprint());
-        return clientProvider.get().compute().servers().bootAndWaitActive(request.build(), timeout);
+        final ServerCreate sc = request.build();
+        LOGGER.log(Level.FINER, "{0}:{1} calling compute().servers().bootAndWaitActive(\"{2}\",{3})", new Object[] {this, Thread.currentThread(), sc.getName(), timeout});
+        return clientProvider.get().compute().servers().bootAndWaitActive(sc, timeout);
     }
 
     /**
@@ -505,6 +666,7 @@ public class Openstack {
         if (fipsService != null) {
             for (FloatingIP ip : fipsService.list()) {
                 if (nodeId.equals(ip.getInstanceId())) {
+                    LOGGER.log(Level.FINER, "{0}:{1} calling compute().floatingIps().deallocateIP({2})", new Object[]{this, Thread.currentThread(), ip.getId()});
                     ActionResponse res = fipsService.deallocateIP(ip.getId());
                     if (res.isSuccess()) {
                         debug("Deallocated Floating IP " + ip.getFloatingIpAddress());
@@ -518,12 +680,15 @@ public class Openstack {
         }
 
         ServerService servers = clientProvider.get().compute().servers();
+        // do not cache this as we want the answer for "right now"
+        LOGGER.log(Level.FINER, "{0}:{1} calling compute().servers().get({2})", new Object[]{this, Thread.currentThread(), nodeId});
         server = servers.get(nodeId);
         if (server == null || server.getStatus() == Server.Status.DELETED) {
             debug("Machine destroyed: " + nodeId);
             return; // Deleted
         }
 
+        LOGGER.log(Level.FINER, "{0}:{1} calling compute().servers().delete({2})", new Object[]{this, Thread.currentThread(), nodeId});
         ActionResponse res = servers.delete(nodeId);
         if (res.getCode() == 404) {
             debug("Machine destroyed: " + nodeId);
@@ -546,6 +711,7 @@ public class Openstack {
         ComputeFloatingIPService fips = clientProvider.get().compute().floatingIps(); // This throws when user is not authorized to manipulate FIPs
         FloatingIP ip;
         try {
+            LOGGER.log(Level.FINER, "{0}:{1} calling compute().floatingIps().allocateIP({2})", new Object[]{this, Thread.currentThread(), poolName});
             ip = fips.allocateIP(poolName);
         } catch (ResponseException ex) {
             // TODO Grab some still IPs from JCloudsCleanupThread
@@ -554,6 +720,7 @@ public class Openstack {
         debug("Floating IP allocated " + ip.getFloatingIpAddress());
         try {
             debug("Assigning floating IP to " + server.getName());
+            LOGGER.log(Level.FINER, "{0}:{1} calling compute().floatingIps().addFloatingIP({2},{3})", new Object[]{this, Thread.currentThread(), server.getId(), ip.getFloatingIpAddress()});
             ActionResponse res = fips.addFloatingIP(server, ip.getFloatingIpAddress());
             throwIfFailed(res);
             debug("Floating IP assigned");
@@ -563,6 +730,7 @@ public class Openstack {
                     : new ActionFailed("Unable to assign floating IP for " + server.getName(), _ex)
             ;
 
+            LOGGER.log(Level.FINER, "{0}:{1} calling compute().floatingIps().deallocateIP({2})", new Object[]{this, Thread.currentThread(), ip.getId()});
             ActionResponse res = fips.deallocateIP(ip.getId());
             logIfFailed(res);
             throw ex;
@@ -572,6 +740,7 @@ public class Openstack {
     }
 
     public void destroyFip(String fip) {
+        LOGGER.log(Level.FINER, "{0}:{1} calling networking().floatingip().delete({2})", new Object[]{this, Thread.currentThread(), fip});
         ActionResponse delete = clientProvider.get().networking().floatingip().delete(fip);
 
         // Deleted by some other action. Being idempotent here and reporting success.
@@ -699,7 +868,7 @@ public class Openstack {
         // Try to talk to all endpoints the plugin rely on so we know they exist, are enabled, user have permission to
         // access them and JVM trusts their SSL cert.
         try {
-            OSClient client = clientProvider.get();
+            OSClient<?> client = clientProvider.get();
             client.networking().network().get("");
             client.images().listMembers("");
             client.compute().listExtensions().size();
@@ -725,35 +894,72 @@ public class Openstack {
 
     @Restricted(NoExternalUse.class) // Extension point just for testing
     public static abstract class FactoryEP implements ExtensionPoint {
+        /** Holds instances until their login session expires or until they've been unused for an hour. */
         private final transient @Nonnull Cache<String, Openstack> cache = CacheBuilder.newBuilder()
-                // There is no clear reasoning behind particular expiration policy except that individual instances can
-                // have different token expiration time, which is something guava does not support. This expiration needs
-                // to be implemented separately.
-                // According to OpenStack documentation, default token lifetime is one hour so let's use that as a baseline.
-                .expireAfterWrite(1, TimeUnit.HOURS)
+                .expireAfterAccess(1, TimeUnit.HOURS)
                 .build()
         ;
 
+        /** Called to instantiate a new Openstack instance */
         public abstract @Nonnull Openstack getOpenstack(
                 @Nonnull String endPointUrl, @Nonnull String identity, @Nonnull String credential, @CheckForNull String region
         ) throws FormValidation;
 
         /**
-         * Instantiate Openstack client.
+         * Obtain Openstack client, instantiating a new one (only) if necessary.
+         * This is thread-safe.
          */
         public static @Nonnull Openstack get(
-                @Nonnull String endPointUrl, @Nonnull String identity, @Nonnull String credential, @CheckForNull String region
+                @Nonnull final String endPointUrl, @Nonnull final String identity, @Nonnull final String credential, @CheckForNull final String region
         ) throws FormValidation {
-            String fingerprint = Util.getDigestOf(endPointUrl + '\n' + identity + '\n' + credential + '\n' + region);
-            FactoryEP ep = ExtensionList.lookup(FactoryEP.class).get(0);
-
-            Openstack cachedInstance = ep.cache.getIfPresent(fingerprint);
-            if (cachedInstance == null || isExpired(cachedInstance)) {
-                cachedInstance = ep.getOpenstack(endPointUrl, identity, credential, region);
-                ep.cache.put(fingerprint, cachedInstance);
+            final String fingerprint = Util.getDigestOf(endPointUrl + '\n' + identity + '\n' + credential + '\n' + region);
+            final FactoryEP ep = ExtensionList.lookup(FactoryEP.class).get(0);
+            // Discard existing cached instance if it has expired.
+            final String reason;
+            final Openstack cachedInstance = ep.cache.getIfPresent(fingerprint);
+            if (cachedInstance == null) {
+                reason = "there was no instance in the cache";
+            } else {
+                final long timeNow = System.currentTimeMillis();
+                if (cachedInstance.isExpired(timeNow)) {
+                    LOGGER.log(Level.FINE, "{0} has expired - invalidating {1} entry \"{2}\".", new Object[] {cachedInstance, ep.cache, fingerprint});
+                    ep.cache.invalidate(fingerprint);
+                    reason = "the token had expired in the old instance";
+                } else {
+                    reason = "another thread realised that the token had expired in the old instance";
+                }
             }
-
-            return cachedInstance;
+            final Callable<Openstack> cacheMissFunction = new Callable<Openstack>() {
+                @Override
+                public Openstack call() throws FormValidation {
+                    LOGGER.log(Level.FINER, "Creating new {0}(\"{1}\",\"{2}\",...,\"{3}\") for cache {4} entry \"{5}\" as {6}.",
+                            new Object[] {Openstack.class.getSimpleName(), endPointUrl, identity, region, ep.cache, fingerprint, reason});
+                    final Openstack newInstance = ep.getOpenstack(endPointUrl, identity, credential, region);
+                    final Date expiryDate = newInstance.getExpires();
+                    LOGGER.log(Level.INFO, "Created new {0}(\"{1}\",\"{2}\",...,\"{3}\")={4} (login expires at {5}) for cache {6} entry \"{7}\" as {8}.",
+                            new Object[] {Openstack.class.getSimpleName(), endPointUrl, identity, region, newInstance, expiryDate, ep.cache, fingerprint, reason});
+                    return newInstance;
+                }
+            };
+            // Get an instance, creating a new one if necessary.
+            // If there wasn't one earlier and still isn't, we'll create one.
+            // If there wasn't one earlier but is now, it'll be recent enough that it won't have expired yet.
+            // If there was one earlier but isn't now, it'll be because we decided it'd expired or another thread did.
+            // If there was one earlier and still is, it passed our expiry check a moment ago.
+            try {
+                final Openstack instance = ep.cache.get(fingerprint, cacheMissFunction);
+                return instance;
+            } catch (UncheckedExecutionException | ExecutionException e) {
+                // Exception was thrown when creating a new instance.
+                final Throwable cause = e.getCause();
+                if (cause instanceof FormValidation) {
+                    throw (FormValidation) cause;
+                }
+                if (cause instanceof RuntimeException) {
+                    throw (RuntimeException) cause;
+                }
+                throw new RuntimeException(e);
+            }
         }
 
         public static @Nonnull FactoryEP replace(@Nonnull FactoryEP factory) {
@@ -764,8 +970,52 @@ public class Openstack {
         }
     }
 
-    private static boolean isExpired(Openstack cachedInstance) {
-        return cachedInstance.getExpires().compareTo(new Date()) < 1;
+    /**
+     * Checks that the login session is still valid. This takes into
+     * consideration any potential time difference between our clock and the
+     * remote clock. It also allows for a margin of error.
+     * 
+     * @param rightNowAccordingToUs
+     *            Time "now".
+     * @return true if the login session is now too old to be used OR if it
+     *         might expire too soon, false if it will be valid for some time.
+     */
+    private boolean isExpired(final long rightNowAccordingToUs) {
+        // Workaround bug JENKINS-46541.
+        // Openstack4J will parse "2017-08-30T13:46:51.480655Z" as "Aug 30
+        // 13:54:51 GMT 2017" because it treats ".480655" to be "480655
+        // milliseconds" rather than "480655 microseconds".
+        // This means that the expiry date can be over-stated by up to 999000
+        // milliseconds. We have to ensure we account for that.
+        final long openstack4jDateParsingBugWorkaround = 999000L;
+        // The token needs to stay valid during the operation(s) we're about to
+        // use it for, e.g. waiting for an instance to boot up, so we allow 10
+        // minutes.
+        final long maxExpectedUsageDuration = 10L * 60L * 1000L;
+        final Date tokenIssueDateAccordingToOpenstack = getIssued();
+        final long amountOpenstackTimeIsAheadOfUs;
+        final long marginOfClockError;
+        if (tokenIssueDateAccordingToOpenstack == null) {
+            // OpenStack client didn't tell us a login time, so we can't
+            // compensate for our time being different.
+            amountOpenstackTimeIsAheadOfUs = 0L;
+            // ... but we can allow for OpenStack time and our Time to be up to
+            // 60 seconds adrift
+            marginOfClockError = 60000L;
+        } else {
+            // Our clocks may differ, so we allow for that difference...
+            final long openstackTime = tokenIssueDateAccordingToOpenstack.getTime();
+            final long ourTime = getLoginTimeMillis();
+            amountOpenstackTimeIsAheadOfUs = openstackTime - ourTime;
+            // .. and allow for 10 seconds of drift over the token lifetime.
+            marginOfClockError = 10000L;
+        }
+        final Date tokenExpiryDateAccordingToOpenstack = getExpires();
+        final long tokenExpiryAccordingToOpenstack = tokenExpiryDateAccordingToOpenstack.getTime();
+        final long remaining = tokenExpiryAccordingToOpenstack - amountOpenstackTimeIsAheadOfUs - rightNowAccordingToUs
+                - marginOfClockError - maxExpectedUsageDuration - openstack4jDateParsingBugWorkaround;
+        final boolean tokenIsNotValidEnough = remaining <= 0L;
+        return tokenIsNotValidEnough;
     }
 
     @Extension
@@ -798,9 +1048,10 @@ public class Openstack {
         /**
          * Reuse auth session between different threads creating separate client for every use.
          */
-        public abstract @Nonnull OSClient get();
+        public abstract @Nonnull OSClient<?> get();
 
         protected abstract Date _getExpires();
+        protected abstract Date _getIssued();
 
         @Nonnull Date getExpires() {
             Date ex = _getExpires();
@@ -810,7 +1061,12 @@ public class Openstack {
             return ex;
         }
 
-        private static ClientProvider get(OSClient client) {
+        @CheckForNull Date getIssued() {
+            Date ex = _getIssued();
+            return ex;
+        }
+
+        private static ClientProvider<?> get(OSClient<?> client) {
             if (client instanceof OSClient.OSClientV2) return new SessionClientV2Provider((OSClient.OSClientV2) client);
             if (client instanceof OSClient.OSClientV3) return new SessionClientV3Provider((OSClient.OSClientV3) client);
 
@@ -825,12 +1081,17 @@ public class Openstack {
                 super(toStore.getAccess());
             }
 
-            public @Nonnull OSClient get() {
+            public @Nonnull OSClient<?> get() {
                 return OSFactory.clientFromAccess(storage);
             }
 
             public Date _getExpires() {
                 return storage.getToken().getExpires();
+            }
+
+            @Override
+            protected Date _getIssued() {
+                return null;
             }
         }
 
@@ -840,12 +1101,17 @@ public class Openstack {
                 super(toStore.getToken());
             }
 
-            public @Nonnull OSClient get() {
+            public @Nonnull OSClient<?> get() {
                 return OSFactory.clientFromToken(storage);
             }
 
             public Date _getExpires() {
                 return storage.getExpires();
+            }
+
+            @Override
+            protected Date _getIssued() {
+                return storage.getIssuedAt();
             }
         }
     }

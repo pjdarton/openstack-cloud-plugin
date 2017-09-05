@@ -173,7 +173,7 @@ public class OpenstackTest {
         when(mockIS.listAll(anyMapOf(String.class, String.class))).thenReturn(images);
         final ArrayList<String> expected = new ArrayList<>(
                 Arrays.asList("mockImageNamedBar2Id", "mockImageNamedBar3Id", "mockImageNamedBar1Id"));
-        final OSClient mockClient = mock(OSClient.class);
+        final OSClient.OSClientV3 mockClient = mock(OSClient.OSClientV3.class);
         when(mockClient.images()).thenReturn(mockIS);
 
         final Openstack instance = new Openstack(mockClient);
@@ -191,7 +191,7 @@ public class OpenstackTest {
     public void getImageIdsForGivenUnknownThenReturnsEmpty() {
         final ImageService mockIS = mock(ImageService.class);
         when(mockIS.listAll(anyMapOf(String.class, String.class))).thenReturn(Collections.EMPTY_LIST);
-        final OSClient mockClient = mock(OSClient.class);
+        final OSClient.OSClientV3 mockClient = mock(OSClient.OSClientV3.class);
         when(mockClient.images()).thenReturn(mockIS);
         final ArrayList<String> expected = new ArrayList<>();
 
@@ -216,7 +216,7 @@ public class OpenstackTest {
         final ImageService mockIS = mock(ImageService.class);
         when(mockIS.listAll(anyMapOf(String.class, String.class))).thenReturn(Collections.EMPTY_LIST);
         when(mockIS.get(imageId)).thenReturn(mockImageNamedFoo);
-        final OSClient mockClient = mock(OSClient.class);
+        final OSClient.OSClientV3 mockClient = mock(OSClient.OSClientV3.class);
         when(mockClient.images()).thenReturn(mockIS);
         final ArrayList<String> expected = new ArrayList<>(Arrays.asList(mockImageNamedFoo.getId()));
 
